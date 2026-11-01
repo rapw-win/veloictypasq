@@ -43,9 +43,10 @@ static_assert(IM_ARRAYSIZE(kChamsMat) == IM_ARRAYSIZE(kChamsNames), "one name pe
 // ---- model renderer ------------------------------------------------------------------------------------------------
 
 constexpr int kW = 480, kH = 924; // largest render buffer (velocitypasq size); the texture is allocated at this size
-// The agent is rendered at the size it is shown (x kRenderScale), into the top-left corner of the texture: on a phone
-// that is ~3x fewer pixels than 480 x 924, which keeps animated chams smooth.
-constexpr float kRenderScale = 0.85f;
+// The agent is supersampled: rendered at 1.3x the size it is shown (at least 720 px tall, at most 480 x 924) into the
+// top-left corner of the texture, so the model and the chams stay sharp on any screen.
+constexpr float kRenderScale = 1.3f;
+constexpr int kMinRenderH = 720;
 
 struct Renderer {
     ImTextureData* tex = nullptr;
@@ -293,7 +294,7 @@ void DrawEspPreview(ImDrawList* dl, const ImRect& area, const PlayerVisuals& v, 
     const float mw = std::floor(mh * kW / kH);
     const ImVec2 m0(std::floor(area.GetCenter().x - mw * 0.5f), std::floor(area.GetCenter().y - mh * 0.5f + P(4.0f)));
     const ImRect mr(m0, ImVec2(m0.x + mw, m0.y + mh));
-    const int rh_want = static_cast<int>(mh * kRenderScale) & ~1;
+    const int rh_want = ImClamp(static_cast<int>(mh * kRenderScale), kMinRenderH, kH) & ~1;
     const int rw_want = static_cast<int>(std::lround(rh_want * static_cast<float>(kW) / kH));
     float k = 1.0f; // shown buffer pixel -> screen pixel, set once a render is available
     auto toL = [&](float bx, float by) { return ImVec2(mr.Min.x + bx * k, mr.Min.y + by * k); };

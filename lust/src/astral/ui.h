@@ -89,7 +89,7 @@ struct Context {
     const char* path_panel = "";
 
     std::unordered_map<ImGuiID, Bind> binds;
-    std::vector<std::pair<ImGuiID, ImRect>> bind_buttons; // touch builds: on-screen bind buttons laid out this frame
+    std::vector<std::pair<ImGuiID, ImRect>> bind_buttons; // binds-list rows laid out this frame (touch switches)
     Bind draft;
     ImGuiID draft_owner = 0;
     bool listening = false;
@@ -156,11 +156,10 @@ bool CardCombo(const char* id, int* current, const char* const items[], int coun
 
 // Draws the "Bind" list overlay (call outside the menu window).
 void DrawBindsOverlay(float alpha);
-// Touch builds (LUST_TOUCH): a phone has no keys, so a bind is driven by an on-screen button. Hold = active while the
-// finger is on it, Toggle = tap to switch. Buttons are drawn on the right edge, also while the menu is hidden.
-void DrawBindButtons();
-int BindButtonRects(float* out, int max);   // x, y, w, h (screen px) per button, for the Android touch windows
-void BindButtonTouch(int index, bool down); // from the Android touch windows
+// Touch builds (LUST_TOUCH): a phone has no keys, so a bind is switched from its row in the binds list:
+// Hold = active while the finger is on the row, Toggle = tap to switch.
+int BindButtonRects(float* out, int max);   // x, y, w, h (screen px) per binds-list row, for the Android touch windows
+void BindButtonTouch(int index, bool down); // finger on / off a binds-list row (Android touch windows)
 
 [[nodiscard]] const char* KeyName(ImGuiKey key);
 

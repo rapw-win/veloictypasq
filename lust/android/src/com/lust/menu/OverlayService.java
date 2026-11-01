@@ -56,7 +56,9 @@ public class OverlayService extends Service {
         if (!started) {
             started = true;
             Native.setFilesDir(getFilesDir().getAbsolutePath());
-            createOverlay();
+            int delay = intent != null ? intent.getIntExtra("delay_ms", 0) : 0;
+            if (delay > 0) ui.postDelayed(new Runnable() { @Override public void run() { if (started) createOverlay(); } }, delay);
+            else createOverlay();
         }
         return START_NOT_STICKY;
     }
@@ -199,6 +201,8 @@ public class OverlayService extends Service {
     }
 
     @Override public void onDestroy() {
+        started = false;
+        ui.removeCallbacksAndMessages(null);
         if (gl != null) { try { wm.removeView(gl); } catch (Exception ignored) {} gl = null; }
         if (line != null) { try { wm.removeView(line); } catch (Exception ignored) {} line = null; }
         for (View v : bindViews) { try { wm.removeView(v); } catch (Exception ignored) {} }

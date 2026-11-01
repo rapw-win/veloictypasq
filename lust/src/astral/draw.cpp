@@ -59,7 +59,7 @@ void Glow(ImDrawList* dl, const ImVec2& min, const ImVec2& max, float rounding, 
     const int peak = Channel(color, IM_COL32_A_SHIFT);
     if (peak == 0 || size <= 0.0f) return;
 
-    constexpr int kRings = 6;
+    constexpr int kRings = 12; // lust: 12 rings so large phone scales show no banding
     const ImU32 rgb = color & ~IM_COL32_A_MASK;
     const ImVec2 mn(min.x + offset.x, min.y + offset.y);
     const ImVec2 mx(max.x + offset.x, max.y + offset.y);

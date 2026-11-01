@@ -69,7 +69,7 @@ public class MainActivity extends Activity {
         start.setOnClickListener(v -> onStartPressed());
 
         TextView hint = new TextView(this);
-        hint.setText("After Start the menu opens over other apps.\nTap the white line at the bottom of the screen to show / hide it.");
+        hint.setText("Start opens Standoff 2, the menu appears 3 seconds later.\nTap the white line at the bottom of the screen to show / hide it.");
         hint.setTextColor(0xFF8B8E9A);
         hint.setTextSize(12);
         hint.setGravity(Gravity.CENTER);
@@ -94,9 +94,20 @@ public class MainActivity extends Activity {
         }
     }
 
+    private static final String STANDOFF2 = "com.axlebolt.standoff2";
+
+    // Start the overlay service (the menu appears 3 s later) and open Standoff 2 in the meantime.
     private void launch() {
         Intent i = new Intent(this, OverlayService.class);
+        i.putExtra("delay_ms", 3000);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
-        moveTaskToBack(true);
+        Intent game = getPackageManager().getLaunchIntentForPackage(STANDOFF2);
+        if (game != null) {
+            game.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(game);
+        } else {
+            Toast.makeText(this, "Standoff 2 is not installed: the menu opens here in 3 s", Toast.LENGTH_LONG).show();
+            moveTaskToBack(true);
+        }
     }
 }

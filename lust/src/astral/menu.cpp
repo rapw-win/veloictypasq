@@ -458,9 +458,7 @@ void Menu::Overlays()
 {
     ui::Context& c = ui::Ctx();
     if (cfg_.misc.binds_list) ui::DrawBindsOverlay(1.0f);
-#ifdef LUST_TOUCH
-    ui::DrawBindButtons();
-#endif
+    else ui::Ctx().bind_buttons.clear();
     if (!cfg_.misc.watermark) return;
 
     char text[160];
@@ -483,7 +481,7 @@ void Menu::Overlays()
     const ImVec2 max(vp->WorkPos.x + vp->WorkSize.x - S(16.0f), vp->WorkPos.y + S(16.0f) + h);
     const ImVec2 min(max.x - tw - S(28.0f), max.y - h);
     const float r = ui::Px(c.m.window_rounding);
-    draw::Glow(dl, min, max, r, draw::Col(Rgb(0x000000), 0.35f), S(14.0f), ImVec2(0.0f, S(4.0f)));
+    draw::Glow(dl, min, max, r, draw::Col(Rgb(0x000000), 0.35f), S(14.0f));
     dl->AddRectFilled(min, max, draw::Col(c.pal.panel), r);
     draw::RectGradient(dl, min, ImVec2(max.x, min.y + S(2.0f)), draw::Col(c.pal.title_left), draw::Col(c.pal.title_right), r,
                        ImDrawFlags_RoundCornersTop, true);

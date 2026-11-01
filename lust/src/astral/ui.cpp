@@ -119,7 +119,7 @@ void PopupBackground(ImGuiWindow* window)
     const ImVec2 max(window->Pos.x + window->Size.x, window->Pos.y + window->Size.y);
     const float r = Px(c.m.popup_rounding);
     dl->PushClipRectFullScreen();
-    draw::Glow(dl, min, max, r, draw::Col(Rgb(0x000000), 0.32f), Px(16.0f), ImVec2(0.0f, Px(4.0f)));
+    draw::Glow(dl, min, max, r, draw::Col(Rgb(0x000000), 0.32f), Px(16.0f));
     dl->PopClipRect();
     dl->AddRectFilled(min, max, draw::Col(c.pal.popup), r);
     dl->AddRect(min, max, draw::Col(c.pal.popup_border, 0.55f), r, 0, 1.0f);
@@ -210,12 +210,12 @@ bool KeyButton(const char* id_str, ImGuiKey* key)
     ImGui::ItemSize(bb, 0.0f);
     if (!ImGui::ItemAdd(bb, id)) return false;
 #ifdef LUST_TOUCH
-    { // no keyboard on a phone: every bind gets an on-screen button instead of a key
+    { // no keyboard on a phone: a bind is switched by tapping its row in the binds list
         (void)key;
         ImDrawList* dl = window->DrawList;
         const float r = Px(c.m.frame_rounding);
         dl->AddRectFilled(bb.Min, bb.Max, draw::Col(c.pal.frame), r);
-        const char* text = "On-screen button";
+        const char* text = "Tap in binds list";
         const float fs = BodySize();
         const float tw = draw::TextWidth(c.fonts.bold, fs, text);
         draw::TextCapCentered(dl, c.fonts.bold, fs, bb.GetCenter().x - tw * 0.5f, bb.GetCenter().y, draw::Col(c.pal.text_soft), text);
@@ -314,7 +314,11 @@ void BindPopup(ImGuiID popup_id, ImGuiID owner, Formatter formatter, const char*
     static const char* const kModes[] = { "Hold", "Toggle", "Always on" };
     int mode = static_cast<int>(d.mode);
     if (Combo("##bind_mode", &mode, kModes, IM_ARRAYSIZE(kModes))) d.mode = static_cast<BindMode>(mode);
+#ifdef LUST_TOUCH
+    d.show_in_list = true; // the binds list is where a bind is switched on a phone
+#else
     Checkbox("Display in binds list", &d.show_in_list);
+#endif
 
     const auto existing = c.binds.find(owner);
     const bool exists = existing != c.binds.end();
@@ -448,7 +452,7 @@ bool Dropdown(ImGuiID popup_id, const ImRect& frame, const char* const items[], 
     const float r = Px(c.m.frame_rounding);
 
     dl->PushClipRectFullScreen();
-    draw::Glow(dl, body.Min, body.Max, r, draw::Col(Rgb(0x000000), 0.30f * e), Px(14.0f), ImVec2(0.0f, Px(4.0f)));
+    draw::Glow(dl, body.Min, body.Max, r, draw::Col(Rgb(0x000000), 0.30f * e), Px(14.0f));
     dl->PopClipRect();
     dl->AddRectFilled(body.Min, body.Max, draw::Col(c.pal.dropdown), r);
     dl->PushClipRect(body.Min, body.Max, true);
@@ -587,7 +591,7 @@ void PickerPopup(ImGuiID popup_id, ColorValue* cv, bool alpha, const ImVec2& anc
 
     dl->PushClipRectFullScreen();
     draw::Glow(dl, o, o_max, r, draw::Col(ImVec4(col.x, col.y, col.z, 1.0f), 0.30f), Px(12.0f));
-    draw::Glow(dl, o, o_max, r, draw::Col(Rgb(0x000000), 0.25f), Px(16.0f), ImVec2(0.0f, Px(4.0f)));
+    draw::Glow(dl, o, o_max, r, draw::Col(Rgb(0x000000), 0.25f), Px(16.0f));
     dl->PopClipRect();
     dl->AddRectFilled(o, o_max, draw::Col(c.pal.panel), r);
 
@@ -1505,67 +1509,6 @@ bool CardCombo(const char* id_str, int* current, const char* const items[], int 
     return Dropdown(popup_id, frame, items, count, current, nullptr, items[*current], tx);
 }
 
-void DrawBindButtons()
-{
-    Context& c = g_ctx;
-    c.bind_buttons.clear();
-    std::vector<std::pair<ImGuiID, Bind*>> list;
-    for (auto& entry : c.binds)
-        if (entry.second.mode != BindMode::Always) list.emplace_back(entry.first, &entry.second);
-    if (list.empty()) return;
-    std::sort(list.begin(), list.end(), [](const auto& a, const auto& b) {
-        const int d = std::strcmp(a.second->label, b.second->label);
-        return d != 0 ? d < 0 : a.first < b.first;
-    });
-
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float h = S(32.0f), gap = S(8.0f), pad = S(16.0f);
-    const float fs = BodySize();
-    float w = S(96.0f);
-    for (const auto& e : list) w = ImMax(w, draw::TextWidth(c.fonts.bold, fs, e.second->label) + pad * 2.0f);
-    const ImVec2 origin(vp->WorkPos.x + vp->WorkSize.x - S(16.0f) - w, vp->WorkPos.y + std::floor(vp->WorkSize.y * 0.30f));
-    const float total_h = h * static_cast<float>(list.size()) + gap * static_cast<float>(list.size() - 1);
-
-    ImGui::SetNextWindowPos(origin);
-    ImGui::SetNextWindowSize(ImVec2(w, total_h));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
-                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
-    if (ImGui::Begin("##lust_bind_buttons", nullptr, flags)) {
-        ImGuiWindow* window = ImGui::GetCurrentWindow();
-        ImDrawList* dl = window->DrawList;
-        for (size_t i = 0; i < list.size(); ++i) {
-            Bind& b = *list[i].second;
-            const ImVec2 mn(origin.x, origin.y + (h + gap) * static_cast<float>(i));
-            const ImRect bb(mn, ImVec2(mn.x + w, mn.y + h));
-            c.bind_buttons.emplace_back(list[i].first, bb);
-            ImGui::PushID(static_cast<int>(list[i].first));
-            const ImGuiID id = window->GetID("##bind_button");
-            ImGui::PopID();
-            ImGui::ItemAdd(bb, id);
-            bool hovered = false, held = false;
-            if (ImGui::ButtonBehavior(bb, id, &hovered, &held, ImGuiButtonFlags_PressedOnClick) && b.mode == BindMode::Toggle) b.screen_pressed = true;
-            b.ui_down = held;
-            const float on = Animate(id, "on", b.active ? 1.0f : 0.0f, 16.0f, b.active ? 1.0f : 0.0f);
-            const float press = Animate(id, "press", (held || b.screen_down) ? 1.0f : 0.0f, 24.0f, 0.0f);
-            const float r = h * 0.5f;
-            dl->PushClipRectFullScreen();
-            draw::Glow(dl, bb.Min, bb.Max, r, draw::Col(Rgb(0x000000), 0.28f), Px(10.0f), ImVec2(0.0f, Px(3.0f)));
-            if (on > 0.01f) draw::Glow(dl, bb.Min, bb.Max, r, draw::Col(c.pal.accent, 0.35f * on), Px(10.0f));
-            dl->PopClipRect();
-            dl->AddRectFilled(bb.Min, bb.Max, draw::Col(draw::Mix(c.pal.panel, c.pal.frame_hover, press), 0.94f), r);
-            if (on > 0.01f)
-                draw::RectGradient(dl, bb.Min, bb.Max, draw::Col(c.pal.accent_top, on), draw::Col(c.pal.accent_end, on), r, 0, true);
-            dl->AddRect(bb.Min, bb.Max, draw::Col(on > 0.5f ? c.pal.accent_top : c.pal.popup_border, 0.8f), r, 0, 1.0f);
-            const float tw = draw::TextWidth(c.fonts.bold, fs, b.label);
-            draw::TextCapCentered(dl, c.fonts.bold, fs, std::floor(bb.GetCenter().x - tw * 0.5f), bb.GetCenter().y,
-                                  draw::Col(draw::Mix(c.pal.text_soft, c.pal.text, ImMax(on, press))), b.label);
-        }
-    }
-    ImGui::End();
-    ImGui::PopStyleVar();
-}
-
 int BindButtonRects(float* out, int max)
 {
     const Context& c = g_ctx;
@@ -1595,14 +1538,20 @@ void BindButtonTouch(int index, bool down)
 void DrawBindsOverlay(float alpha)
 {
     Context& c = g_ctx;
-    int shown = 0;
-    for (const auto& entry : c.binds)
-        if (entry.second.show_in_list) ++shown;
-    if (shown == 0 || alpha <= 0.01f) return;
+    c.bind_buttons.clear();
+    std::vector<std::pair<ImGuiID, Bind*>> list;
+    for (auto& entry : c.binds)
+        if (entry.second.show_in_list) list.emplace_back(entry.first, &entry.second);
+    if (list.empty() || alpha <= 0.01f) return;
+    std::sort(list.begin(), list.end(), [](const auto& a, const auto& b) {
+        const int d = std::strcmp(a.second->label, b.second->label);
+        return d != 0 ? d < 0 : a.first < b.first;
+    });
 
     const float w = S(190.0f);
     const float head = S(26.0f);
     const float row = S(22.0f);
+    const int shown = static_cast<int>(list.size());
     ImGui::SetNextWindowPos(ImVec2(S(24.0f), S(220.0f)), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(w, head + row * static_cast<float>(shown) + S(6.0f)));
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
@@ -1616,7 +1565,7 @@ void DrawBindsOverlay(float alpha)
         const ImVec2 o_max(o.x + window->Size.x, o.y + window->Size.y);
         const float r = Px(c.m.window_rounding);
         dl->PushClipRectFullScreen();
-        draw::Glow(dl, o, o_max, r, draw::Col(Rgb(0x000000), 0.3f), Px(14.0f), ImVec2(0, Px(4.0f)));
+        draw::Glow(dl, o, o_max, r, draw::Col(Rgb(0x000000), 0.3f), Px(14.0f));
         dl->PopClipRect();
         dl->AddRectFilled(o, o_max, draw::Col(c.pal.panel), r);
         draw::RectGradient(dl, o, ImVec2(o_max.x, o.y + head), draw::Col(c.pal.title_left), draw::Col(c.pal.title_right), r,
@@ -1625,9 +1574,19 @@ void DrawBindsOverlay(float alpha)
         draw::TextCapCentered(dl, c.fonts.bold, fs, o.x + S(10.0f), o.y + head * 0.5f, draw::Col(c.pal.text), "Binds");
         float y = o.y + head + S(3.0f);
         static const char* const kModeNames[] = { "hold", "toggle", "always" };
-        for (const auto& entry : c.binds) {
-            const Bind& b = entry.second;
-            if (!b.show_in_list) continue;
+        // Each row is the bind's switch: Hold = active while the finger is on the row, Toggle = tap to switch.
+        // On Android a small touch window sits over every row, so the list works while the menu is hidden.
+        for (const auto& e : list) {
+            Bind& b = *e.second;
+            const ImRect bb(ImVec2(o.x, y), ImVec2(o_max.x, y + row));
+            c.bind_buttons.emplace_back(e.first, bb);
+            ImGui::PushID(static_cast<int>(e.first));
+            const ImGuiID id = window->GetID("##bind_row");
+            ImGui::PopID();
+            ImGui::ItemAdd(bb, id);
+            bool hovered = false, held = false;
+            if (ImGui::ButtonBehavior(bb, id, &hovered, &held, ImGuiButtonFlags_PressedOnClick) && b.mode == BindMode::Toggle) b.screen_pressed = true;
+            b.ui_down = held;
             const ImVec4 tc = b.active ? c.pal.text : c.pal.text_dim;
             draw::TextCapCentered(dl, c.fonts.regular, fs, o.x + S(10.0f), y + row * 0.5f, draw::Col(tc), b.label);
             char mode[32];
@@ -1637,7 +1596,8 @@ void DrawBindsOverlay(float alpha)
                                   draw::Col(b.active ? c.pal.accent : c.pal.text_dim), mode);
             y += row;
         }
-        ImGui::Dummy(window->Size);
+        ImGui::SetCursorScreenPos(o);
+        ImGui::Dummy(ImVec2(0.0f, 0.0f));
     }
     ImGui::End();
     ImGui::PopStyleVar(2);

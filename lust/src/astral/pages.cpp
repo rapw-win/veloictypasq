@@ -709,7 +709,7 @@ void Menu::PageMisc(const ImRect& card, const ImRect& area)
         ui::Caption("Tap the line at the bottom  -  show / hide");
         ui::Caption("Drag the title bar  -  move the menu");
         ui::Caption("Drag the corner  -  resize the menu");
-        ui::Caption("Hold an option  -  bind it to a screen button");
+        ui::Caption("Hold an option  -  bind it, tap it in Binds to use");
         ui::Separator();
         ui::Caption("lust  -  t.me/lustriped");
         ui::EndPanel();
