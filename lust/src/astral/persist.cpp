@@ -12,13 +12,18 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#ifndef LUST_WEB
 #include <filesystem>
 #include <fstream>
+#endif
+#include <map>
 #include <system_error>
 
 namespace astral::persist {
 
+#ifndef LUST_WEB
 namespace fs = std::filesystem;
+#endif
 
 namespace {
 
@@ -49,6 +54,7 @@ std::string& BaseDir()
     return dir;
 }
 
+#ifndef LUST_WEB
 [[nodiscard]] fs::path Folder(bool scripts)
 {
     fs::path dir = fs::path(BaseDir()) / (scripts ? "scripts" : "configs");
@@ -89,6 +95,14 @@ std::string& BaseDir()
     }
     return out;
 }
+#else
+// web build: no file system, configs live in memory for the session
+std::map<std::string, std::vector<unsigned char>>& Store()
+{
+    static std::map<std::string, std::vector<unsigned char>> s;
+    return s;
+}
+#endif
 
 [[nodiscard]] std::vector<unsigned char> Encode(const Config& cfg)
 {
@@ -197,6 +211,51 @@ bool IsValidName(const std::string& name)
     return true;
 }
 
+#ifdef LUST_WEB
+std::vector<FileEntry> ListConfigs(SortOrder)
+{
+    std::vector<FileEntry> out;
+    std::uint64_t stamp = 0;
+    for (const auto& kv : Store()) {
+        FileEntry e;
+        e.name = kv.first;
+        e.size = kv.second.size();
+        e.stamp = ++stamp;
+        e.modified = "this session";
+        out.push_back(e);
+    }
+    return out;
+}
+
+bool SaveConfig(const Config& cfg, const std::string& name, std::string& error)
+{
+    if (!IsValidName(name)) {
+        error = "Invalid name";
+        return false;
+    }
+    Store()[name] = Encode(cfg);
+    return true;
+}
+
+bool LoadConfig(Config& cfg, const std::string& name, std::string& error)
+{
+    const auto it = Store().find(name);
+    if (it == Store().end()) {
+        error = "File not found";
+        return false;
+    }
+    return Decode(cfg, it->second.data(), it->second.size(), error);
+}
+
+bool DeleteConfig(const std::string& name, std::string& error)
+{
+    if (Store().erase(name) == 0) {
+        error = "File not found";
+        return false;
+    }
+    return true;
+}
+#else
 std::vector<FileEntry> ListConfigs(SortOrder order)
 {
     std::vector<FileEntry> out = List(false, ".lust");
@@ -263,6 +322,8 @@ bool DeleteConfig(const std::string& name, std::string& error)
     return true;
 }
 
+#endif
+
 std::string ExportConfig(const Config& cfg) { return std::string(kExportPrefix) + Base64(Encode(cfg)); }
 
 bool ImportConfig(Config& cfg, const char* text, std::string& error)
@@ -307,6 +368,13 @@ void Sanitize(Config& cfg)
     ClampIndex(cfg.misc.dpi_mode, 6);
 }
 
+#ifdef LUST_WEB
+std::vector<FileEntry> ListScripts() { return {}; }
+std::vector<std::string> ReadScriptPreview(const std::string&, int) { return {}; }
+std::vector<std::string> LoadAutoload() { return {}; }
+bool SaveAutoload(const std::vector<std::string>&, std::string&) { return true; }
+void OpenFolder(bool) {}
+#else
 std::vector<FileEntry> ListScripts()
 {
     std::vector<FileEntry> out = List(true, ".lua");
@@ -355,6 +423,8 @@ bool SaveAutoload(const std::vector<std::string>& names, std::string& error)
 }
 
 void OpenFolder(bool scripts) { (void)Folder(scripts); } // no file browser from an overlay: just make sure it exists
+
+#endif
 
 void SetBaseDir(const char* dir)
 {

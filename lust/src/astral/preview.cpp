@@ -93,6 +93,12 @@ void Worker()
     }
 }
 
+#ifdef __wasi__
+// Web build: no threads in wasm, so the "worker" is a second instance of this module in a Web Worker (web/shell.html).
+// model_request hands it the settings; it calls lust_model_done() after writing the pixels into lust_model_buffer().
+extern "C" __attribute__((import_module("env"), import_name("model_request"))) void js_model_request(const void* settings, int size);
+#endif
+
 void LoadIcons(Renderer& r)
 {
     int w = 0, h = 0;
@@ -119,7 +125,9 @@ void Update(const M3DSettings& want, bool animated)
         std::memset(r.tex->Pixels, 0, static_cast<size_t>(kW) * kH * 4);
         ImGui::RegisterUserTexture(r.tex);
         r.done.resize(static_cast<size_t>(kW) * kH * 4);
+#ifndef __wasi__
         std::thread(Worker).detach();
+#endif
         LoadIcons(r);
     }
     const double now = ImGui::GetTime();
@@ -135,7 +143,11 @@ void Update(const M3DSettings& want, bool animated)
             r.req_s = want;
             r.req_t = now;
             r.have = true;
+#ifdef __wasi__
+            js_model_request(&r.job_s, static_cast<int>(sizeof(M3DSettings))); // rendered by a Web Worker
+#else
             r.cv.notify_one();
+#endif
         }
         if (r.ready) {
             r.ready = false;
@@ -227,6 +239,18 @@ void OutlinedText(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, const Im
 }
 
 } // namespace
+
+#ifdef __wasi__
+extern "C" __attribute__((export_name("lust_model_buffer"))) unsigned char* lust_model_buffer() { return R().done.data(); }
+extern "C" __attribute__((export_name("lust_model_done"))) void lust_model_done(float x0, float y0, float x1, float y1, int valid)
+{
+    Renderer& r = R();
+    r.done_s = r.job_s;
+    r.done_o = M3DOut{ x0, y0, x1, y1, valid != 0 };
+    r.ready = true;
+    r.busy = false;
+}
+#endif
 
 const char* const* ChamsMaterialNames(int* count)
 {

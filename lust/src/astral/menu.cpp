@@ -13,6 +13,10 @@
 #include <cstdint>
 #include <ctime>
 
+#ifdef LUST_WEB
+int lust_web_tz_minutes(); // the browser's UTC offset (WASI has no time zones), web/web_main.cpp
+#endif
+
 namespace astral {
 
 namespace {
@@ -457,9 +461,14 @@ void Menu::Overlays()
     if (!cfg_.misc.watermark) return;
 
     char text[160];
-    const std::time_t now = std::time(nullptr);
     std::tm local{};
+#ifdef LUST_WEB
+    const std::time_t now = std::time(nullptr) + static_cast<std::time_t>(::lust_web_tz_minutes()) * 60;
+    gmtime_r(&now, &local);
+#else
+    const std::time_t now = std::time(nullptr);
     localtime_r(&now, &local);
+#endif
     ImFormatString(text, IM_ARRAYSIZE(text), "lust  |  %s  |  %.0f fps  |  %02d:%02d", user_.name.c_str(),
                    static_cast<double>(ImGui::GetIO().Framerate), local.tm_hour, local.tm_min);
 

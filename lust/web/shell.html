@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>lust</title>
+<style>
+  :root { --bg0: #1c2129; --bg1: #101217; --line: rgba(255, 255, 255, 0.55); --text: #c9ccd4; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg1); touch-action: none;
+               -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; outline: none; }
+  #line { position: fixed; left: 50%; bottom: 2px; transform: translateX(-50%); height: 30px; cursor: pointer; z-index: 2; }
+  #line::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 5px; margin-top: -2.5px; border-radius: 3px;
+                 background: var(--line); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2); transition: background 0.25s; }
+  #line.flash::after { background: rgba(255, 255, 255, 0.9); transition: none; }
+  #status { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text);
+            font: 600 15px/1.4 system-ui, sans-serif; text-align: center; padding: 16px; }
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0"></canvas>
+<div id="line" title="show / hide"></div>
+<div id="status">loading lust…</div>
+<script>
+"use strict";
+const WASM_GZ = "__WASM_GZ_BASE64__";
+
+(async function main() {
+  const status = document.getElementById("status");
+  const fail = (msg) => { status.textContent = msg; status.style.display = "flex"; };
+  const canvas = document.getElementById("c");
+  const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, premultipliedAlpha: false });
+  if (!gl) return fail("WebGL2 is not available in this browser.");
+
+  // ---- unpack the menu (gzip + base64) ----
+  let bytes;
+  try {
+    const gz = Uint8Array.from(atob(WASM_GZ), (c) => c.charCodeAt(0));
+    bytes = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+  } catch (e) { return fail("Could not unpack the menu: " + e); }
+
+  // ---- minimal WASI (clocks, random, stdout to the console; no files), shared with the model worker ----
+  function makeImports(module, getMem, env) {
+    const dv = () => new DataView(getMem().buffer);
+    const u8 = (p, n) => new Uint8Array(getMem().buffer, p, n);
+    const ENOSYS = 52, EBADF = 8, ENOENT = 44;
+    let outBuf = "";
+    const wasi = {
+      clock_time_get(id, prec, out) {
+        const ns = id === 0 ? BigInt(Date.now()) * 1000000n : BigInt(Math.round(performance.now() * 1e6));
+        dv().setBigUint64(out, ns, true); return 0;
+      },
+      clock_res_get(id, out) { dv().setBigUint64(out, 1000n, true); return 0; },
+      random_get(p, n) { crypto.getRandomValues(u8(p, n)); return 0; },
+      fd_write(fd, iovs, n, nw) {
+        let total = 0;
+        for (let i = 0; i < n; i++) {
+          const p = dv().getUint32(iovs + i * 8, true), l = dv().getUint32(iovs + i * 8 + 4, true);
+          outBuf += new TextDecoder().decode(u8(p, l).slice()); total += l;
+        }
+        const lines = outBuf.split("\n"); outBuf = lines.pop();
+        for (const l of lines) console.log("[lust]", l);
+        dv().setUint32(nw, total, true); return 0;
+      },
+      environ_sizes_get(c, s) { dv().setUint32(c, 0, true); dv().setUint32(s, 0, true); return 0; },
+      environ_get() { return 0; },
+      args_sizes_get(c, s) { dv().setUint32(c, 0, true); dv().setUint32(s, 0, true); return 0; },
+      args_get() { return 0; },
+      fd_prestat_get() { return EBADF; },
+      fd_prestat_dir_name() { return EBADF; },
+      fd_fdstat_get(fd, out) { if (fd > 2) return EBADF; u8(out, 24).fill(0); dv().setUint8(out, 2); return 0; },
+      fd_close() { return 0; },
+      fd_seek() { return ENOSYS; },
+      path_open() { return ENOENT; },
+      path_filestat_get() { return ENOENT; },
+      proc_exit(code) { throw new Error("exit " + code); },
+      sched_yield() { return 0; },
+    };
+    const imports = { wasi_snapshot_preview1: {}, env: Object.assign({}, env) };
+    for (const imp of WebAssembly.Module.imports(module)) {
+      const ns = imports[imp.module] || (imports[imp.module] = {});
+      if (imp.kind === "function" && !(imp.name in ns))
+        ns[imp.name] = imp.module === "wasi_snapshot_preview1" ? (wasi[imp.name] || (() => ENOSYS)) : () => 0;
+    }
+    return imports;
+  }
+
+  let mem = null, ex;
+  const u8 = (p, n) => new Uint8Array(mem.buffer, p, n);
+  const textures = new Map();
+  try {
+    const module = await WebAssembly.compile(bytes);
+
+    // model worker: a second instance renders the 3D agent off the UI thread (like the APK's render thread)
+    const workerSrc = makeImports.toString() + `
+      let wex, wmem;
+      onmessage = async (e) => {
+        if (e.data.module) {
+          const inst = await WebAssembly.instantiate(e.data.module, makeImports(e.data.module, () => wmem, {}));
+          wex = inst.exports; wmem = wex.memory; if (wex._initialize) wex._initialize();
+          postMessage({ ready: true }); return;
+        }
+        const s = e.data.s;
+        new Uint8Array(wmem.buffer, wex.lust_worker_settings(), s.length).set(s);
+        const p = wex.lust_worker_render(480, 924);
+        const px = new Uint8Array(wmem.buffer, p, 480 * 924 * 4).slice();
+        const o = wex.lust_worker_out(), d = new DataView(wmem.buffer);
+        postMessage({ px, out: [d.getFloat32(o, true), d.getFloat32(o + 4, true), d.getFloat32(o + 8, true), d.getFloat32(o + 12, true), d.getUint8(o + 16)] }, [px.buffer]);
+      };`;
+    const worker = new Worker(URL.createObjectURL(new Blob([workerSrc], { type: "text/javascript" })));
+    let workerReady = false, pending = null;
+    worker.onmessage = (e) => {
+      if (e.data.ready) { workerReady = true; if (pending) { worker.postMessage({ s: pending }); pending = null; } return; }
+      u8(ex.lust_model_buffer(), e.data.px.length).set(e.data.px);
+      const o = e.data.out; ex.lust_model_done(o[0], o[1], o[2], o[3], o[4]);
+    };
+    worker.postMessage({ module });
+
+    const env = {
+      model_request(p, n) { const s = u8(p, n).slice(); if (workerReady) worker.postMessage({ s }); else pending = s; },
+      tex_create(id, w, h, p) {
+        const t = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, u8(p, w * h * 4));
+        textures.set(id, t);
+      },
+      tex_update(id, x, y, w, h, pitch, p) {
+        gl.bindTexture(gl.TEXTURE_2D, textures.get(id));
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, pitch);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, u8(p, (pitch * (h - 1) + w) * 4));
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+      },
+      tex_destroy(id) { gl.deleteTexture(textures.get(id)); textures.delete(id); },
+    };
+    const inst = await WebAssembly.instantiate(module, makeImports(module, () => mem, env));
+    ex = inst.exports; mem = ex.memory;
+    if (ex._initialize) ex._initialize();
+  } catch (e) { return fail("Could not start the menu: " + e); }
+
+  // ---- WebGL2 renderer for ImGui draw data ----
+  const vs = `#version 300 es
+    uniform vec2 uSize; layout(location=0) in vec2 aPos; layout(location=1) in vec2 aUV; layout(location=2) in vec4 aCol;
+    out vec2 vUV; out vec4 vCol;
+    void main() { vUV = aUV; vCol = aCol; gl_Position = vec4(aPos.x / uSize.x * 2.0 - 1.0, 1.0 - aPos.y / uSize.y * 2.0, 0.0, 1.0); }`;
+  const fs = `#version 300 es
+    precision mediump float; uniform sampler2D uTex; in vec2 vUV; in vec4 vCol; out vec4 o;
+    void main() { o = vCol * texture(uTex, vUV); }`;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
+  const prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(prog);
+  const uSize = gl.getUniformLocation(prog, "uSize");
+  const vao = gl.createVertexArray(), vbo = gl.createBuffer(), ibo = gl.createBuffer();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 20, 0);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 20, 8);
+  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.UNSIGNED_BYTE, true, 20, 16);
+
+  // ---- size: the same fit as the APK (600 x 620 menu, 0.05 steps) ----
+  let W = 0, H = 0, dpr = 1;
+  const fitScale = (w, h) => Math.min(4, Math.max(0.75, Math.floor(Math.min(h * 0.9 / 620, w * 0.94 / 600) * 20) / 20));
+  const line = document.getElementById("line");
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    W = Math.round(innerWidth * dpr); H = Math.round(innerHeight * dpr);
+    canvas.width = W; canvas.height = H;
+    line.style.width = Math.round(Math.min(innerWidth, innerHeight) * 0.62) + "px";
+    return fitScale(W, H);
+  }
+  const scale0 = resize();
+  ex.lust_init(scale0, -new Date().getTimezoneOffset());
+  addEventListener("resize", () => ex.lust_set_scale(resize()));
+
+  // ---- input: queued, one button transition per frame (hover before press, like the Android host) ----
+  const queue = [];
+  const pos = (e) => [e.clientX * dpr, e.clientY * dpr];
+  canvas.addEventListener("pointerdown", (e) => { canvas.focus(); canvas.setPointerCapture(e.pointerId); queue.push([0, ...pos(e), e.pointerType === "touch"], [1, ...pos(e), e.pointerType === "touch"]); e.preventDefault(); });
+  canvas.addEventListener("pointermove", (e) => { queue.push([0, ...pos(e), e.pointerType === "touch"]); });
+  canvas.addEventListener("pointerup", (e) => { const t = e.pointerType === "touch"; queue.push([0, ...pos(e), t], [2, ...pos(e), t]); if (t) queue.push([3, 0, 0, t]); });
+  canvas.addEventListener("pointercancel", (e) => { queue.push([2, ...pos(e), true], [3, 0, 0, true]); });
+  canvas.addEventListener("pointerleave", (e) => { if (e.pointerType !== "touch" && !e.buttons) queue.push([3, 0, 0, false]); });
+  canvas.addEventListener("wheel", (e) => { ex.lust_wheel(-e.deltaY / 100); e.preventDefault(); }, { passive: false });
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  const keys = { Backspace: 1, Enter: 2, Escape: 3, ArrowLeft: 4, ArrowRight: 5, Delete: 6, Control: 7 };
+  canvas.addEventListener("keydown", (e) => {
+    if (e.key in keys) { ex.lust_key(keys[e.key], 1); e.preventDefault(); }
+    else if (e.ctrlKey && e.key.toLowerCase() === "f") { ex.lust_key(8, 1); ex.lust_key(8, 0); e.preventDefault(); }
+    else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) { ex.lust_char(e.key.codePointAt(0)); e.preventDefault(); }
+  });
+  canvas.addEventListener("keyup", (e) => { if (e.key in keys) ex.lust_key(keys[e.key], 0); });
+  line.addEventListener("click", () => {
+    ex.lust_toggle();
+    line.classList.add("flash"); setTimeout(() => line.classList.remove("flash"), 60);
+  });
+
+  status.style.display = "none";
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.25, (now - last) / 1000); last = now;
+    while (queue.length) {
+      const [k, x, y, t] = queue.shift();
+      ex.lust_pointer(k, x, y, t ? 1 : 0);
+      if (k !== 0) break;
+    }
+    const p = ex.lust_frame(W, H, dt);
+    const d = new DataView(mem.buffer);
+    gl.viewport(0, 0, W, H);
+    gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.enable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD);
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.CULL_FACE); gl.disable(gl.DEPTH_TEST); gl.enable(gl.SCISSOR_TEST);
+    gl.useProgram(prog); gl.uniform2f(uSize, W, H); gl.bindVertexArray(vao); gl.activeTexture(gl.TEXTURE0);
+    let o = p, lists = d.getUint32(o, true); o += 4;
+    for (let l = 0; l < lists; l++) {
+      const vp = d.getUint32(o, true), vn = d.getUint32(o + 4, true), ip = d.getUint32(o + 8, true), inn = d.getUint32(o + 12, true), cn = d.getUint32(o + 16, true);
+      o += 20;
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo); gl.bufferData(gl.ARRAY_BUFFER, u8(vp, vn * 20), gl.STREAM_DRAW);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, u8(ip, inn * 2), gl.STREAM_DRAW);
+      for (let c = 0; c < cn; c++) {
+        const count = d.getUint32(o, true), off = d.getUint32(o + 4, true), tex = d.getUint32(o + 8, true);
+        const x0 = d.getFloat32(o + 12, true), y0 = d.getFloat32(o + 16, true), x1 = d.getFloat32(o + 20, true), y1 = d.getFloat32(o + 24, true);
+        o += 28;
+        if (x1 <= x0 || y1 <= y0) continue;
+        gl.scissor(Math.max(0, x0 | 0), Math.max(0, (H - y1) | 0), Math.ceil(x1 - x0), Math.ceil(y1 - y0));
+        gl.bindTexture(gl.TEXTURE_2D, textures.get(tex) || null);
+        gl.drawElements(gl.TRIANGLES, count, gl.UNSIGNED_SHORT, off * 2);
+      }
+    }
+    gl.disable(gl.SCISSOR_TEST);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
