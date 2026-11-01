@@ -24,9 +24,9 @@
   **Multipoints** (тот же список) + Point scale, слайдер **Field of view** 0–360°.
 - **Visuals → Enemy** (и Team / Local): 3D-модель агента из velocitypasq (`model3d.cpp`, программный рендер в
   отдельном потоке, idle-анимация из лобби; Enemy — CT с M4, Team — T с AKR), вращение пальцем.
-  - Чамсы — список материалов velocitypasq: Flat, Glow, Glass, Wireframe, Galaxy Wireframe, Waterflow, Galaxy,
-    Glitter, Lightning, Fire, Star Nest, Dissolve, Hologram, Rainbow, Crystal, Liquid Metal, Aurora, Recon, Viper, Omen
-    (+ Overlay поверх текстуры), Glow — обводка модели.
+  - Чамсы — материалы velocitypasq: Flat, Glow, Glass, Wireframe, Galaxy Wireframe, Waterflow, Galaxy, Glitter,
+    Lightning, Fire, Star Nest, Dissolve, Crystal, Liquid Metal, Aurora. Список с мини-превью агента в каждом
+    материале (окрашено цветом Visible), выбранный подсвечен акцентом. + Overlay поверх текстуры, Glow — обводка.
   - ESP-превью по логике velocitypasq: бокс по границам модели (Default / Corner / 3D), скелет и хитбоксы по костям
     анимации, head dot, backtrack-скелет, текст на модели (ник, оружие, дистанция, флаги) с обводкой, анимированная
     полоска HP, броня, патроны, иконка оружия, шрифты Default / Verdana / Pixel. Любой элемент можно перетащить

@@ -293,7 +293,7 @@ void Sanitize(Config& cfg)
     for (PlayerVisuals& pv : cfg.visuals.players) {
         ClampIndex(pv.box_type, 3);
         ClampIndex(pv.esp_font, 3);
-        ClampIndex(pv.chams_material, 20);
+        ClampIndex(pv.chams_material, 15);
     }
     ClampIndex(cfg.skins.group, kGroupCount);
     for (int g = 0; g < kGroupCount; ++g) {

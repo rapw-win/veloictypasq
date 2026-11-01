@@ -509,10 +509,9 @@ void Menu::PageVisuals(const ImRect& card, const ImRect& area)
     ui::Checkbox("Glow", &P.glow);
     ui::ColorDot("##glow_col", &P.glow_color);
     ui::Checkbox("Chams", &P.chams);
-    if (ui::BeginSettings("##chams")) {
-        int material_count = 0;
-        const char* const* materials = ChamsMaterialNames(&material_count);
-        ui::Combo("Material", &P.chams_material, materials, material_count);
+    if (ui::BeginSettings("##chams", ui::SettingsIcon::Plus, S(270.0f))) {
+        ChamsMaterialPicker("##material", &P.chams_material, P, V.target);
+        ui::Separator();
         ui::Checkbox("Overlay", &P.chams_overlay);
         ui::Tooltip("Draw the material on top of the textured model.");
         ui::ColorRow("Visible", &P.chams_visible);
