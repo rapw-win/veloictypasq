@@ -37,11 +37,8 @@ constexpr int kChamsMat[] = { M3D_FLAT,    M3D_GLOW,     M3D_GLASS,    M3D_WIREF
 constexpr const char* kChamsNames[] = { "Flat",      "Glow",   "Glass",   "Wireframe", "Galaxy Wireframe",
                                         "Waterflow", "Galaxy", "Glitter", "Lightning", "Fire",
                                         "Star Nest", "Dissolve", "Crystal", "Liquid Metal", "Aurora" };
-constexpr const char* kChamsShort[] = { "Flat",      "Glow",   "Glass",   "Wireframe", "Galaxy Wire",
-                                        "Waterflow", "Galaxy", "Glitter", "Lightning", "Fire",
-                                        "Star Nest", "Dissolve", "Crystal", "Metal",    "Aurora" };
 constexpr int kChamsCount = IM_ARRAYSIZE(kChamsMat);
-static_assert(IM_ARRAYSIZE(kChamsMat) == IM_ARRAYSIZE(kChamsNames) && IM_ARRAYSIZE(kChamsMat) == IM_ARRAYSIZE(kChamsShort), "one name per material");
+static_assert(IM_ARRAYSIZE(kChamsMat) == IM_ARRAYSIZE(kChamsNames), "one name per material");
 
 // ---- model renderer ------------------------------------------------------------------------------------------------
 
@@ -158,108 +155,6 @@ void Update(const M3DSettings& want, bool animated)
     }
 }
 
-// ---- material thumbnails: the agent rendered once in every material, cropped to a bust shot, packed in one atlas ----
-
-constexpr int kTW = 240, kTH = 462;            // thumbnail render (half of the preview buffer, same framing)
-constexpr int kCropY = 14, kCropH = 260;       // bust crop inside the render
-constexpr int kTCols = 5, kTRows = (kChamsCount + kTCols - 1) / kTCols;
-constexpr int kAW = kTW * kTCols, kAH = kCropH * kTRows;
-
-struct Thumbs {
-    ImTextureData* tex = nullptr;
-    std::mutex mx;
-    std::condition_variable cv;
-    bool job = false, ready = false, busy = false, have = false;
-    M3DSettings job_s, req_s;
-    std::vector<std::uint8_t> done;
-};
-
-Thumbs& T()
-{
-    static Thumbs* t = new Thumbs();
-    return *t;
-}
-
-void ThumbWorker()
-{
-    Thumbs& t = T();
-    std::vector<std::uint8_t> buf(static_cast<size_t>(kTW) * kTH * 4), atlas(static_cast<size_t>(kAW) * kAH * 4);
-    for (;;) {
-        M3DSettings base;
-        {
-            std::unique_lock<std::mutex> lk(t.mx);
-            t.cv.wait(lk, [&t] { return t.job; });
-            base = t.job_s;
-            t.job = false;
-        }
-        std::fill(atlas.begin(), atlas.end(), 0);
-        for (int i = 0; i < kChamsCount; ++i) {
-            M3DSettings s = base;
-            s.mat = kChamsMat[i];
-            M3DOut o{};
-            M3D_Render(buf.data(), kTW, kTH, s, &o);
-            const int ax = (i % kTCols) * kTW, ay = (i / kTCols) * kCropH;
-            for (int y = 0; y < kCropH; ++y)
-                std::memcpy(&atlas[(static_cast<size_t>(ay + y) * kAW + ax) * 4], &buf[static_cast<size_t>(kCropY + y) * kTW * 4],
-                            static_cast<size_t>(kTW) * 4);
-        }
-        std::lock_guard<std::mutex> lk(t.mx);
-        t.done = atlas;
-        t.ready = true;
-        t.busy = false;
-    }
-}
-
-// Requests thumbnails for the given model / colour and uploads finished ones. Returns the atlas (or nullptr).
-ImTextureData* UpdateThumbs(int model, const ImVec4& col, bool overlay)
-{
-    Thumbs& t = T();
-    if (t.tex == nullptr) {
-        M3D_Init();
-        t.tex = IM_NEW(ImTextureData)();
-        t.tex->Create(ImTextureFormat_RGBA32, kAW, kAH);
-        std::memset(t.tex->Pixels, 0, static_cast<size_t>(kAW) * kAH * 4);
-        ImGui::RegisterUserTexture(t.tex);
-        std::thread(ThumbWorker).detach();
-    }
-    M3DSettings want;
-    want.model = model;
-    want.yaw = 0.42f;                 // three-quarter view
-    want.anim = 1.2f;                 // a frame of the lobby idle
-    want.time = 2.6f;                 // animated materials: a fixed, busy-looking moment
-    want.col[0] = col.x;
-    want.col[1] = col.y;
-    want.col[2] = col.z;
-    want.col[3] = 1.0f;
-    want.overlay = overlay;
-    bool fresh = false;
-    {
-        std::lock_guard<std::mutex> lk(t.mx);
-        if ((!t.have || !Same(want, t.req_s)) && !t.busy) {
-            t.job_s = want;
-            t.req_s = want;
-            t.job = true;
-            t.busy = true;
-            t.have = true;
-            t.cv.notify_one();
-        }
-        if (t.ready) {
-            t.ready = false;
-            fresh = true;
-            std::memcpy(t.tex->Pixels, t.done.data(), t.done.size());
-        }
-    }
-    if (fresh && t.tex->Status == ImTextureStatus_OK) {
-        const ImTextureRect rect = { 0, 0, static_cast<unsigned short>(kAW), static_cast<unsigned short>(kAH) };
-        t.tex->Updates.resize(0);
-        t.tex->Updates.push_back(rect);
-        t.tex->UpdateRect = rect;
-        t.tex->UsedRect = rect;
-        t.tex->SetStatus(ImTextureStatus_WantUpdates);
-    }
-    return t.tex;
-}
-
 void ToF(float* d, const ImVec4& c)
 {
     d[0] = c.x;
@@ -339,7 +234,7 @@ const char* const* ChamsMaterialNames(int* count)
     return kChamsNames;
 }
 
-bool ChamsMaterialPicker(const char* id_str, int* current, const PlayerVisuals& v, int target)
+bool ChamsMaterialPicker(const char* id_str, int* current, const PlayerVisuals&, int)
 {
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     if (window->SkipItems) return false;
@@ -360,8 +255,7 @@ bool ChamsMaterialPicker(const char* id_str, int* current, const PlayerVisuals& 
     const float sw = draw::TextWidth(c.fonts.bold, fs, sel_name);
     draw::TextCapCentered(dl, c.fonts.bold, fs, pos.x + avail - sw, pos.y + head_h * 0.5f, draw::Col(c.pal.accent), sel_name);
 
-    // list: one row per material inside a rounded well; mini preview of the material, name, check on the selected one
-    ImTextureData* atlas = UpdateThumbs(target == 1 ? 2 : 1, v.chams_visible.Resolve(0.0), v.chams_overlay);
+    // list: one row per material inside a rounded well; name, check on the selected one
     const float row_h = S(25.0f);
     const float pad = S(4.0f);
     const ImVec2 list0(pos.x, pos.y + head_h + S(4.0f));
@@ -370,7 +264,6 @@ bool ChamsMaterialPicker(const char* id_str, int* current, const PlayerVisuals& 
     dl->AddRectFilled(well.Min, well.Max, draw::Col(draw::Mix(c.pal.panel, c.pal.frame, 0.35f)), ui::Px(8.0f));
     dl->AddRect(well.Min, well.Max, draw::Col(c.pal.popup_border, 0.45f), ui::Px(8.0f), 0, 1.0f);
     const float rr = ui::Px(6.0f);
-    const float sw_sz = std::floor(row_h - S(6.0f));
     bool changed = false;
     for (int i = 0; i < kChamsCount; ++i) {
         const ImVec2 mn(well.Min.x + pad, well.Min.y + pad + row_h * i);
@@ -400,21 +293,8 @@ bool ChamsMaterialPicker(const char* id_str, int* current, const PlayerVisuals& 
             dl->AddLine(ImVec2(bb.Min.x + S(10.0f), bb.Min.y), ImVec2(bb.Max.x - S(10.0f), bb.Min.y), draw::Col(c.pal.popup_border, 0.35f), 1.0f);
         }
 
-        // mini preview: the agent's head and shoulders in this material
-        const ImVec2 s0(bb.Min.x + S(10.0f), std::floor(bb.GetCenter().y - sw_sz * 0.5f));
-        const ImVec2 s1(s0.x + sw_sz, s0.y + sw_sz);
-        dl->AddRectFilled(s0, s1, draw::Col(Rgb(0x14151B)), ui::Px(5.0f));
-        if (atlas != nullptr) {
-            const int col = i % kTCols, row = i / kTCols;
-            const float cx0 = col * kTW + kTW * 0.30f, cx1 = col * kTW + kTW * 0.70f; // square crop around the head
-            const float cy0 = row * kCropH + 2.0f, cy1 = cy0 + (cx1 - cx0);
-            dl->AddImageRounded(atlas->GetTexRef(), s0, s1, ImVec2(cx0 / kAW, cy0 / kAH), ImVec2(cx1 / kAW, cy1 / kAH), draw::Col(ImVec4(1, 1, 1, 1)),
-                                ui::Px(5.0f));
-        }
-        dl->AddRect(s0, s1, draw::Col(selected ? c.pal.accent : c.pal.popup_border, selected ? 0.9f : 0.6f), ui::Px(5.0f), 0, 1.0f);
-
         ImFont* f = selected ? c.fonts.bold : c.fonts.regular;
-        draw::TextCapCentered(dl, f, fs, s1.x + S(9.0f), bb.GetCenter().y,
+        draw::TextCapCentered(dl, f, fs, bb.Min.x + S(12.0f), bb.GetCenter().y,
                               draw::Col(draw::Mix(c.pal.text_soft, c.pal.text, ImMax(sel, hot * 0.6f))), kChamsNames[i]);
         if (sel > 0.01f) {
             const float ck = S(10.0f);

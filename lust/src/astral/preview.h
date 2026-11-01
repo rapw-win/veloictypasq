@@ -11,8 +11,7 @@ namespace astral {
 // Chams materials of the velocitypasq menu (same order as its chams list).
 [[nodiscard]] const char* const* ChamsMaterialNames(int* count);
 
-// Chams material picker: a list with a mini preview of the agent rendered in each material (velocitypasq model3d),
-// tinted with the visible chams colour. Returns true when the selection changed.
+// Chams material picker: a styled list of the materials. Returns true when the selection changed.
 bool ChamsMaterialPicker(const char* id, int* current, const PlayerVisuals& v, int target);
 
 // Live ESP preview inside the current (pane) window: the 3D agent rendered with the selected chams / glow, plus
