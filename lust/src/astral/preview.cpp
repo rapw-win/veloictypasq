@@ -42,7 +42,10 @@ static_assert(IM_ARRAYSIZE(kChamsMat) == IM_ARRAYSIZE(kChamsNames), "one name pe
 
 // ---- model renderer ------------------------------------------------------------------------------------------------
 
-constexpr int kW = 480, kH = 924; // render buffer (velocitypasq size)
+constexpr int kW = 480, kH = 924; // largest render buffer (velocitypasq size); the texture is allocated at this size
+// The agent is rendered at the size it is shown (x kRenderScale), into the top-left corner of the texture: on a phone
+// that is ~3x fewer pixels than 480 x 924, which keeps animated chams smooth.
+constexpr float kRenderScale = 0.85f;
 
 struct Renderer {
     ImTextureData* tex = nullptr;
@@ -51,6 +54,7 @@ struct Renderer {
     std::condition_variable cv;
     bool job = false, ready = false, busy = false, have = false;
     M3DSettings job_s, req_s, shown_s, done_s;
+    int job_w = kW, job_h = kH, req_w = 0, req_h = 0, done_w = kW, done_h = kH, shown_w = kW, shown_h = kH;
     M3DOut done_o{}, shown_o{};
     std::vector<std::uint8_t> done;
     double req_t = -1.0;
@@ -75,19 +79,24 @@ void Worker()
     std::vector<std::uint8_t> buf(static_cast<size_t>(kW) * kH * 4);
     for (;;) {
         M3DSettings js;
+        int w = kW, h = kH;
         {
             std::unique_lock<std::mutex> lk(r.mx);
             r.cv.wait(lk, [&r] { return r.job; });
             js = r.job_s;
+            w = r.job_w;
+            h = r.job_h;
             r.job = false;
         }
         M3DOut o{};
-        M3D_Render(buf.data(), kW, kH, js, &o);
+        M3D_Render(buf.data(), w, h, js, &o);
         std::lock_guard<std::mutex> lk(r.mx);
         r.done.swap(buf);
         if (buf.size() != r.done.size()) buf.resize(r.done.size());
         r.done_s = js;
         r.done_o = o;
+        r.done_w = w;
+        r.done_h = h;
         r.ready = true;
         r.busy = false;
     }
@@ -96,7 +105,7 @@ void Worker()
 #ifdef __wasi__
 // Web build: no threads in wasm, so the "worker" is a second instance of this module in a Web Worker (web/shell.html).
 // model_request hands it the settings; it calls lust_model_done() after writing the pixels into lust_model_buffer().
-extern "C" __attribute__((import_module("env"), import_name("model_request"))) void js_model_request(const void* settings, int size);
+extern "C" __attribute__((import_module("env"), import_name("model_request"))) void js_model_request(const void* settings, int size, int w, int h);
 #endif
 
 void LoadIcons(Renderer& r)
@@ -115,7 +124,7 @@ void LoadIcons(Renderer& r)
     ImGui::RegisterUserTexture(r.icons);
 }
 
-void Update(const M3DSettings& want, bool animated)
+void Update(const M3DSettings& want, bool animated, int rw, int rh)
 {
     Renderer& r = R();
     if (r.tex == nullptr) {
@@ -131,20 +140,25 @@ void Update(const M3DSettings& want, bool animated)
         LoadIcons(r);
     }
     const double now = ImGui::GetTime();
-    bool need = !r.have || !Same(want, r.req_s);
-    if (animated && need && r.have && now - r.req_t < 1.0 / 45.0 && want.mat == r.req_s.mat) need = false; // ~45 fps
+    rw = ImClamp(rw, 64, kW);
+    rh = ImClamp(rh, 120, kH);
+    const bool resized = rw != r.req_w || rh != r.req_h;
+    bool need = !r.have || resized || !Same(want, r.req_s);
+    if (animated && need && !resized && r.have && now - r.req_t < 1.0 / 45.0 && want.mat == r.req_s.mat) need = false; // ~45 fps
     bool fresh = false;
     {
         std::lock_guard<std::mutex> lk(r.mx);
         if (need && !r.busy) {
             r.job_s = want;
+            r.job_w = r.req_w = rw;
+            r.job_h = r.req_h = rh;
             r.job = true;
             r.busy = true;
             r.req_s = want;
             r.req_t = now;
             r.have = true;
 #ifdef __wasi__
-            js_model_request(&r.job_s, static_cast<int>(sizeof(M3DSettings))); // rendered by a Web Worker
+            js_model_request(&r.job_s, static_cast<int>(sizeof(M3DSettings)), rw, rh); // rendered by a Web Worker
 #else
             r.cv.notify_one();
 #endif
@@ -152,13 +166,17 @@ void Update(const M3DSettings& want, bool animated)
         if (r.ready) {
             r.ready = false;
             fresh = true;
-            std::memcpy(r.tex->Pixels, r.done.data(), static_cast<size_t>(kW) * kH * 4);
+            auto* px = static_cast<std::uint8_t*>(r.tex->Pixels);
+            for (int y = 0; y < r.done_h; ++y)
+                std::memcpy(px + static_cast<size_t>(y) * kW * 4, r.done.data() + static_cast<size_t>(y) * r.done_w * 4, static_cast<size_t>(r.done_w) * 4);
             r.shown_s = r.done_s;
             r.shown_o = r.done_o;
+            r.shown_w = r.done_w;
+            r.shown_h = r.done_h;
         }
     }
     if (fresh && r.tex->Status == ImTextureStatus_OK) {
-        const ImTextureRect rect = { 0, 0, static_cast<unsigned short>(kW), static_cast<unsigned short>(kH) };
+        const ImTextureRect rect = { 0, 0, static_cast<unsigned short>(r.shown_w), static_cast<unsigned short>(r.shown_h) };
         r.tex->Updates.resize(0);
         r.tex->Updates.push_back(rect);
         r.tex->UpdateRect = rect;
@@ -246,6 +264,8 @@ extern "C" __attribute__((export_name("lust_model_done"))) void lust_model_done(
 {
     Renderer& r = R();
     r.done_s = r.job_s;
+    r.done_w = r.job_w;
+    r.done_h = r.job_h;
     r.done_o = M3DOut{ x0, y0, x1, y1, valid != 0 };
     r.ready = true;
     r.busy = false;
@@ -256,77 +276,6 @@ const char* const* ChamsMaterialNames(int* count)
 {
     if (count != nullptr) *count = kChamsCount;
     return kChamsNames;
-}
-
-bool ChamsMaterialPicker(const char* id_str, int* current, const PlayerVisuals&, int)
-{
-    ImGuiWindow* window = ImGui::GetCurrentWindow();
-    if (window->SkipItems) return false;
-    ui::Context& c = ui::Ctx();
-    auto S = [](float x) { return draw::Snap(ui::Px(x)); };
-    *current = ImClamp(*current, 0, kChamsCount - 1);
-    ImGui::PushID(id_str);
-
-    // header: caption + selected material in the accent colour
-    const ImVec2 pos = window->DC.CursorPos;
-    const float avail = ImGui::GetContentRegionAvail().x;
-    const float fs = ui::FontPx(c.m.font_body);
-    const float head_h = S(20.0f);
-    ImGui::ItemSize(ImRect(pos, ImVec2(pos.x + avail, pos.y + head_h)), 0.0f);
-    ImDrawList* dl = window->DrawList;
-    draw::TextCapCentered(dl, c.fonts.regular, fs, pos.x, pos.y + head_h * 0.5f, draw::Col(c.pal.text_dim), "Material");
-    const char* sel_name = kChamsNames[*current];
-    const float sw = draw::TextWidth(c.fonts.bold, fs, sel_name);
-    draw::TextCapCentered(dl, c.fonts.bold, fs, pos.x + avail - sw, pos.y + head_h * 0.5f, draw::Col(c.pal.accent), sel_name);
-
-    // list: one row per material inside a rounded well; name, check on the selected one
-    const float row_h = S(25.0f);
-    const float pad = S(4.0f);
-    const ImVec2 list0(pos.x, pos.y + head_h + S(4.0f));
-    const ImRect well(list0, ImVec2(list0.x + avail, list0.y + pad * 2.0f + row_h * kChamsCount));
-    ImGui::ItemSize(ImRect(well.Min, ImVec2(well.Max.x, well.Max.y + S(2.0f))), 0.0f);
-    dl->AddRectFilled(well.Min, well.Max, draw::Col(draw::Mix(c.pal.panel, c.pal.frame, 0.35f)), ui::Px(8.0f));
-    dl->AddRect(well.Min, well.Max, draw::Col(c.pal.popup_border, 0.45f), ui::Px(8.0f), 0, 1.0f);
-    const float rr = ui::Px(6.0f);
-    bool changed = false;
-    for (int i = 0; i < kChamsCount; ++i) {
-        const ImVec2 mn(well.Min.x + pad, well.Min.y + pad + row_h * i);
-        const ImRect bb(mn, ImVec2(well.Max.x - pad, mn.y + row_h));
-        ImGui::PushID(i);
-        const ImGuiID id = window->GetID("##mat");
-        ImGui::PopID();
-        ImGui::ItemAdd(bb, id);
-        bool hovered = false, held = false;
-        if (ImGui::ButtonBehavior(bb, id, &hovered, &held) && *current != i) {
-            *current = i;
-            changed = true;
-        }
-        const bool selected = *current == i;
-        const float hot = ui::Animate(id, "hot", (hovered || held) ? 1.0f : 0.0f, 18.0f, 0.0f);
-        const float sel = ui::Animate(id, "sel", selected ? 1.0f : 0.0f, 14.0f, selected ? 1.0f : 0.0f);
-
-        if (hot > 0.01f && sel < 0.99f) dl->AddRectFilled(bb.Min, bb.Max, draw::Col(c.pal.frame_hover, 0.7f * hot * (1.0f - sel)), rr);
-        if (sel > 0.01f) {
-            draw::RectGradient(dl, bb.Min, bb.Max, draw::Col(c.pal.accent_top, 0.26f * sel), draw::Col(c.pal.accent_end, 0.06f * sel), rr, 0, true);
-            const float bw = S(3.0f), bh = std::floor(row_h * 0.56f);
-            const ImVec2 b0(bb.Min.x + S(1.0f), std::floor(bb.GetCenter().y - bh * 0.5f));
-            draw::Glow(dl, b0, ImVec2(b0.x + bw, b0.y + bh), bw * 0.5f, draw::Col(c.pal.accent, 0.5f * sel), ui::Px(5.0f));
-            draw::RectGradient(dl, b0, ImVec2(b0.x + bw, b0.y + bh), draw::Col(c.pal.accent_top, sel), draw::Col(c.pal.accent_end, sel), bw * 0.5f, 0,
-                               false);
-        } else if (i > 0 && *current != i - 1) {
-            dl->AddLine(ImVec2(bb.Min.x + S(10.0f), bb.Min.y), ImVec2(bb.Max.x - S(10.0f), bb.Min.y), draw::Col(c.pal.popup_border, 0.35f), 1.0f);
-        }
-
-        ImFont* f = selected ? c.fonts.bold : c.fonts.regular;
-        draw::TextCapCentered(dl, f, fs, bb.Min.x + S(12.0f), bb.GetCenter().y,
-                              draw::Col(draw::Mix(c.pal.text_soft, c.pal.text, ImMax(sel, hot * 0.6f))), kChamsNames[i]);
-        if (sel > 0.01f) {
-            const float ck = S(10.0f);
-            draw::Check(dl, ImVec2(bb.Max.x - S(10.0f) - ck, bb.GetCenter().y - ck * 0.5f), ck, draw::Col(c.pal.accent, sel), ui::Px(1.8f), sel);
-        }
-    }
-    ImGui::PopID();
-    return changed;
 }
 
 void DrawEspPreview(ImDrawList* dl, const ImRect& area, const PlayerVisuals& v, int target, double time)
@@ -344,7 +293,9 @@ void DrawEspPreview(ImDrawList* dl, const ImRect& area, const PlayerVisuals& v, 
     const float mw = std::floor(mh * kW / kH);
     const ImVec2 m0(std::floor(area.GetCenter().x - mw * 0.5f), std::floor(area.GetCenter().y - mh * 0.5f + P(4.0f)));
     const ImRect mr(m0, ImVec2(m0.x + mw, m0.y + mh));
-    const float k = mw / static_cast<float>(kW); // buffer pixel -> screen pixel
+    const int rh_want = static_cast<int>(mh * kRenderScale) & ~1;
+    const int rw_want = static_cast<int>(std::lround(rh_want * static_cast<float>(kW) / kH));
+    float k = 1.0f; // shown buffer pixel -> screen pixel, set once a render is available
     auto toL = [&](float bx, float by) { return ImVec2(mr.Min.x + bx * k, mr.Min.y + by * k); };
 
     // ---- input: press on an ESP element drags it, anywhere else rotates the model (with inertia)
@@ -431,10 +382,12 @@ void DrawEspPreview(ImDrawList* dl, const ImRect& area, const PlayerVisuals& v, 
     want.time = animated ? static_cast<float>(std::fmod(time, 1000.0)) : 0.0f;
     want.anim = static_cast<float>(std::fmod(time, 3600.0)); // lobby idle animation
     animated = true;
-    Update(want, animated);
+    Update(want, animated, rw_want, rh_want);
     if (!r.have) return;
+    k = mw / static_cast<float>(r.shown_w);
     s.spawn = ImMin(1.0f, s.spawn + dt / 0.3f);
-    dl->AddImage(r.tex->GetTexRef(), mr.Min, mr.Max, ImVec2(0, 0), ImVec2(1, 1), draw::Col(ImVec4(1, 1, 1, 1), s.spawn));
+    dl->AddImage(r.tex->GetTexRef(), mr.Min, mr.Max, ImVec2(0, 0),
+                 ImVec2(static_cast<float>(r.shown_w) / kW, static_cast<float>(r.shown_h) / kH), draw::Col(ImVec4(1, 1, 1, 1), s.spawn));
 
     for (bool& b : s.hit_ok) b = false;
     if (!v.enable || !r.shown_o.valid) return;
@@ -443,7 +396,7 @@ void DrawEspPreview(ImDrawList* dl, const ImRect& area, const PlayerVisuals& v, 
     const float kk = k / 0.475f; // velocitypasq sizes were tuned for a 228 px wide preview of the same buffer
     auto proj = [&](const float* p3) {
         float x = 0.0f, y = 0.0f;
-        M3D_Project(p3[0], p3[1], p3[2], kW, kH, ss, &x, &y);
+        M3D_Project(p3[0], p3[1], p3[2], r.shown_w, r.shown_h, ss, &x, &y);
         return toL(x, y);
     };
 
@@ -572,8 +525,8 @@ void DrawEspPreview(ImDrawList* dl, const ImRect& area, const PlayerVisuals& v, 
     int nfl = 0;
     for (int i = 0; i < IM_ARRAYSIZE(kFlagText); ++i)
         if ((v.flags & (1u << i)) != 0) fl[nfl++] = kFlagText[i];
-    const bool want_icon = (v.weapon & (1u << 1)) != 0 && r.icons != nullptr;
-    const bool en[EL_N] = { v.name, v.health, v.armor, (v.weapon & (1u << 2)) != 0, (v.weapon & (1u << 0)) != 0, want_icon, v.distance, nfl > 0 };
+    const bool want_icon = v.weapon_icon && r.icons != nullptr;
+    const bool en[EL_N] = { v.name, v.health, v.armor, v.ammo, v.weapon_name, want_icon, v.distance, nfl > 0 };
     const float bar_t = ImMax(2.0f, std::floor(P(3.0f)));
     const float icon_h = std::floor(P(13.0f));
     const float cx = (b0.x + b1.x) * 0.5f;
@@ -705,7 +658,7 @@ void DrawEspPreview(ImDrawList* dl, const ImRect& area, const PlayerVisuals& v, 
         const float hp = ImClamp(s.hp_cur, 0.0f, 100.0f) / 100.0f, lag = ImClamp(s.hp_lag, 0.0f, 100.0f) / 100.0f;
         const ImRect hb = lr[EL_HP];
         const bool vert = s.side[EL_HP] >= SIDE_LEFT;
-        const ImU32 hc = draw::Col(draw::Mix(Rgb(0xE8503A), Rgb(0x7DDB4F), hp));
+        const ImU32 hc = draw::Col(draw::Mix(v.health_low_color.Resolve(time), v.health_color.Resolve(time), hp));
         dl->AddRectFilled(ImVec2(hb.Min.x - 1, hb.Min.y - 1), ImVec2(hb.Max.x + 1, hb.Max.y + 1), blk);
         const int hv = static_cast<int>(s.hp_cur + 0.5f);
         char t[8];
@@ -743,9 +696,9 @@ void DrawEspPreview(ImDrawList* dl, const ImRect& area, const PlayerVisuals& v, 
             }
         }
     };
-    if (en[EL_AP]) bar_fill(EL_AP, 1.0f, ImVec4(0.36f, 0.62f, 1.0f, 1.0f), nullptr);
-    if (en[EL_AMMO]) bar_fill(EL_AMMO, 14.0f / 30.0f, Rgb(0xE6C46E), "14");
-    if (en[EL_WPN]) OutlinedText(dl, font, fs, lr[EL_WPN].Min, ImVec4(0.86f, 0.86f, 0.90f, 1.0f), weapon);
+    if (en[EL_AP]) bar_fill(EL_AP, 1.0f, v.armor_color.Resolve(time), nullptr);
+    if (en[EL_AMMO]) bar_fill(EL_AMMO, 14.0f / 30.0f, v.ammo_color.Resolve(time), "14");
+    if (en[EL_WPN]) OutlinedText(dl, font, fs, lr[EL_WPN].Min, v.weapon_color.Resolve(time), weapon);
     if (en[EL_ICON]) {
         const WiRect& q = WI_RECTS[wi];
         const ImRect ir = lr[EL_ICON];
@@ -756,9 +709,9 @@ void DrawEspPreview(ImDrawList* dl, const ImRect& area, const PlayerVisuals& v, 
         for (const ImVec2& d : dd)
             dl->AddImage(r.icons->GetTexRef(), ImVec2(ir.Min.x + d.x, ir.Min.y + d.y), ImVec2(ir.Max.x + d.x, ir.Max.y + d.y), uv0, uv1,
                          draw::Col(ImVec4(0, 0, 0, 0.6f)));
-        dl->AddImage(r.icons->GetTexRef(), ir.Min, ir.Max, uv0, uv1, draw::Col(ImVec4(0.92f, 0.92f, 0.95f, 1.0f)));
+        dl->AddImage(r.icons->GetTexRef(), ir.Min, ir.Max, uv0, uv1, draw::Col(v.weapon_icon_color.Resolve(time)));
     }
-    if (en[EL_DIST]) OutlinedText(dl, font, fs, lr[EL_DIST].Min, ImVec4(0.72f, 0.72f, 0.78f, 1.0f), "12m");
+    if (en[EL_DIST]) OutlinedText(dl, font, fs, lr[EL_DIST].Min, v.distance_color.Resolve(time), "12m");
     if (en[EL_FLAGS]) {
         const ImRect fr = lr[EL_FLAGS];
         const int sd = s.side[EL_FLAGS];
@@ -766,7 +719,7 @@ void DrawEspPreview(ImDrawList* dl, const ImRect& area, const PlayerVisuals& v, 
         for (int i = 0; i < nfl; ++i) {
             const float w = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, fl[i]).x;
             const float x = sd == SIDE_LEFT ? fr.Max.x - w : (sd == SIDE_RIGHT ? fr.Min.x : std::floor(fr.GetCenter().x - w * 0.5f));
-            OutlinedText(dl, font, fs, ImVec2(x, fy), i == 0 && (v.flags & 1u) != 0 ? ImVec4(1, 1, 1, 1) : Rgb(0xFF9F43), fl[i]);
+            OutlinedText(dl, font, fs, ImVec2(x, fy), v.flags_color.Resolve(time), fl[i]);
             fy += line_h;
         }
     }

@@ -100,24 +100,24 @@ const WASM_GZ = "__WASM_GZ_BASE64__";
           wex = inst.exports; wmem = wex.memory; if (wex._initialize) wex._initialize();
           postMessage({ ready: true }); return;
         }
-        const s = e.data.s;
+        const s = e.data.s, w = e.data.w, h = e.data.h;
         new Uint8Array(wmem.buffer, wex.lust_worker_settings(), s.length).set(s);
-        const p = wex.lust_worker_render(480, 924);
-        const px = new Uint8Array(wmem.buffer, p, 480 * 924 * 4).slice();
+        const p = wex.lust_worker_render(w, h);
+        const px = new Uint8Array(wmem.buffer, p, w * h * 4).slice();
         const o = wex.lust_worker_out(), d = new DataView(wmem.buffer);
         postMessage({ px, out: [d.getFloat32(o, true), d.getFloat32(o + 4, true), d.getFloat32(o + 8, true), d.getFloat32(o + 12, true), d.getUint8(o + 16)] }, [px.buffer]);
       };`;
     const worker = new Worker(URL.createObjectURL(new Blob([workerSrc], { type: "text/javascript" })));
     let workerReady = false, pending = null;
     worker.onmessage = (e) => {
-      if (e.data.ready) { workerReady = true; if (pending) { worker.postMessage({ s: pending }); pending = null; } return; }
+      if (e.data.ready) { workerReady = true; if (pending) { worker.postMessage(pending); pending = null; } return; }
       u8(ex.lust_model_buffer(), e.data.px.length).set(e.data.px);
       const o = e.data.out; ex.lust_model_done(o[0], o[1], o[2], o[3], o[4]);
     };
     worker.postMessage({ module });
 
     const env = {
-      model_request(p, n) { const s = u8(p, n).slice(); if (workerReady) worker.postMessage({ s }); else pending = s; },
+      model_request(p, n, w, h) { const m = { s: u8(p, n).slice(), w, h }; if (workerReady) worker.postMessage(m); else pending = m; },
       tex_create(id, w, h, p) {
         const t = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, t);

@@ -13,6 +13,7 @@
 
 #include "astral/menu.h"
 #include "astral/persist.h"
+#include "astral/ui.h"
 #include "backends/imgui_impl_opengl3.h"
 #include "imgui.h"
 
@@ -169,4 +170,21 @@ extern "C" JNIEXPORT jint JNICALL Java_com_lust_menu_Native_frame(JNIEnv*, jclas
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     return g_menu->Showing() ? 1 : 0;
+}
+
+// On-screen bind buttons: rects (x, y, w, h in screen px) for the small touch windows Java puts over them, so they
+// work while the menu is hidden and the GL overlay lets touches through. GL thread.
+extern "C" JNIEXPORT jint JNICALL Java_com_lust_menu_Native_bindButtons(JNIEnv* env, jclass, jfloatArray out)
+{
+    if (g_menu == nullptr) return 0;
+    const jsize cap = env->GetArrayLength(out) / 4;
+    float tmp[64 * 4];
+    const int n = astral::ui::BindButtonRects(tmp, cap < 64 ? cap : 64);
+    if (n > 0) env->SetFloatArrayRegion(out, 0, n * 4, tmp);
+    return n;
+}
+
+extern "C" JNIEXPORT void JNICALL Java_com_lust_menu_Native_bindTouch(JNIEnv*, jclass, jint index, jint down)
+{
+    if (g_menu != nullptr) astral::ui::BindButtonTouch(index, down != 0);
 }

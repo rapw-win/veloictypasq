@@ -22,6 +22,9 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
@@ -104,12 +107,78 @@ public class OverlayService extends Service {
 
     private final class MenuRenderer implements GLSurfaceView.Renderer {
         private int last = -1;
+        private final float[] rects = new float[64 * 4];
+        private float[] lastRects = new float[0];
         @Override public void onSurfaceCreated(GL10 g, EGLConfig c) { Native.init(); }
         @Override public void onSurfaceChanged(GL10 g, int w, int h) { Native.resize(w, h); }
         @Override public void onDrawFrame(GL10 g) {
             int f = Native.frame();
             if (f != last) { last = f; ui.post(new ApplyState(f)); }
+            int n = Native.bindButtons(rects);
+            float[] now = Arrays.copyOf(rects, n * 4);
+            if (!Arrays.equals(now, lastRects)) { lastRects = now; ui.post(new SyncBindButtons(now)); }
         }
+    }
+
+    // One small transparent touch window per on-screen bind button (ImGui draws the button itself).
+    private final ArrayList<View> bindViews = new ArrayList<>();
+    private final ArrayList<WindowManager.LayoutParams> bindParams = new ArrayList<>();
+
+    private final class SyncBindButtons implements Runnable {
+        private final float[] r;
+        SyncBindButtons(float[] rects) { r = rects; }
+        @Override public void run() {
+            if (wm == null || gl == null) return;
+            int n = r.length / 4;
+            while (bindViews.size() > n) {
+                View v = bindViews.remove(bindViews.size() - 1);
+                bindParams.remove(bindParams.size() - 1);
+                try { wm.removeView(v); } catch (Exception ignored) {}
+            }
+            for (int i = 0; i < n; ++i) {
+                WindowManager.LayoutParams p;
+                if (i >= bindViews.size()) {
+                    p = new WindowManager.LayoutParams(1, 1, overlayType(),
+                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                            PixelFormat.TRANSLUCENT);
+                    p.gravity = Gravity.TOP | Gravity.LEFT;
+                    if (Build.VERSION.SDK_INT >= 28) p.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                    View v = new View(OverlayService.this);
+                    v.setOnTouchListener(new BindTouch(i));
+                    p.x = (int) r[i * 4]; p.y = (int) r[i * 4 + 1];
+                    p.width = Math.max(1, (int) r[i * 4 + 2]); p.height = Math.max(1, (int) r[i * 4 + 3]);
+                    wm.addView(v, p);
+                    bindViews.add(v); bindParams.add(p);
+                    continue;
+                }
+                p = bindParams.get(i);
+                p.x = (int) r[i * 4]; p.y = (int) r[i * 4 + 1];
+                p.width = Math.max(1, (int) r[i * 4 + 2]); p.height = Math.max(1, (int) r[i * 4 + 3]);
+                wm.updateViewLayout(bindViews.get(i), p);
+            }
+        }
+    }
+
+    private final class BindTouch implements View.OnTouchListener {
+        private final int index;
+        BindTouch(int i) { index = i; }
+        @Override public boolean onTouch(View v, MotionEvent e) {
+            int a = e.getActionMasked();
+            if (a == MotionEvent.ACTION_DOWN) gl.queueEvent(new BindEvent(index, 1));
+            else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) gl.queueEvent(new BindEvent(index, 0));
+            return true;
+        }
+    }
+
+    private static final class BindEvent implements Runnable {
+        private final int index, down;
+        BindEvent(int i, int d) { index = i; down = d; }
+        @Override public void run() { Native.bindTouch(index, down); }
+    }
+
+    private static int overlayType() {
+        return Build.VERSION.SDK_INT >= 26 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY : WindowManager.LayoutParams.TYPE_PHONE;
     }
 
     private final class ApplyState implements Runnable {
@@ -132,6 +201,8 @@ public class OverlayService extends Service {
     @Override public void onDestroy() {
         if (gl != null) { try { wm.removeView(gl); } catch (Exception ignored) {} gl = null; }
         if (line != null) { try { wm.removeView(line); } catch (Exception ignored) {} line = null; }
+        for (View v : bindViews) { try { wm.removeView(v); } catch (Exception ignored) {} }
+        bindViews.clear(); bindParams.clear();
         super.onDestroy();
         System.exit(0);   // native menu state is global: start clean next time
     }

@@ -458,6 +458,9 @@ void Menu::Overlays()
 {
     ui::Context& c = ui::Ctx();
     if (cfg_.misc.binds_list) ui::DrawBindsOverlay(1.0f);
+#ifdef LUST_TOUCH
+    ui::DrawBindButtons();
+#endif
     if (!cfg_.misc.watermark) return;
 
     char text[160];

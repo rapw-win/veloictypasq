@@ -4,6 +4,7 @@
 
 #include "astral/draw.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cfloat>
 #include <cmath>
@@ -182,16 +183,18 @@ void ProcessBinds()
         bool active = b.active;
         switch (b.mode) {
         case BindMode::Hold:
-            active = b.key != ImGuiKey_None && ImGui::IsKeyDown(b.key);
+            active = (b.key != ImGuiKey_None && ImGui::IsKeyDown(b.key)) || b.screen_down || b.ui_down;
             break;
         case BindMode::Toggle:
             if (b.key != ImGuiKey_None && !io.WantTextInput && !c.listening && ImGui::IsKeyPressed(b.key, false)) b.latched = !b.latched;
+            if (b.screen_pressed) b.latched = !b.latched;
             active = b.latched;
             break;
         case BindMode::Always:
             active = true;
             break;
         }
+        b.screen_pressed = false;
         ApplyBind(b, active);
     }
 }
@@ -206,6 +209,19 @@ bool KeyButton(const char* id_str, ImGuiKey* key)
     const ImRect bb(pos, ImVec2(ContentRight(window), pos.y + S(c.m.button_h)));
     ImGui::ItemSize(bb, 0.0f);
     if (!ImGui::ItemAdd(bb, id)) return false;
+#ifdef LUST_TOUCH
+    { // no keyboard on a phone: every bind gets an on-screen button instead of a key
+        (void)key;
+        ImDrawList* dl = window->DrawList;
+        const float r = Px(c.m.frame_rounding);
+        dl->AddRectFilled(bb.Min, bb.Max, draw::Col(c.pal.frame), r);
+        const char* text = "On-screen button";
+        const float fs = BodySize();
+        const float tw = draw::TextWidth(c.fonts.bold, fs, text);
+        draw::TextCapCentered(dl, c.fonts.bold, fs, bb.GetCenter().x - tw * 0.5f, bb.GetCenter().y, draw::Col(c.pal.text_soft), text);
+        return false;
+    }
+#endif
 
     bool hovered = false, held = false;
     if (ImGui::ButtonBehavior(bb, id, &hovered, &held) && !c.listening) {
@@ -337,7 +353,30 @@ void BindContext(ImGuiID id, const char* label, BindKind kind, void* target, flo
     Context& c = g_ctx;
     if (target == nullptr || c.bind_popup_depth > 0) return;
     const ImGuiID popup_id = ImHashStr("##bind", 0, id);
-    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+    bool long_press = false;
+#ifdef LUST_TOUCH
+    { // hold a finger on the option: a ring fills around it, then the bind editor opens
+        const ImGuiIO& io = ImGui::GetIO();
+        constexpr float kStart = 0.12f, kHold = 0.5f;
+        const ImVec2 d(io.MousePos.x - io.MouseClickedPos[0].x, io.MousePos.y - io.MouseClickedPos[0].y);
+        const bool still = d.x * d.x + d.y * d.y < Px(10.0f) * Px(10.0f);
+        if (hovered && io.MouseDown[0] && still && !ImGui::IsPopupOpen(popup_id, ImGuiPopupFlags_None)) {
+            const float t = io.MouseDownDuration[0];
+            if (t >= kHold && io.MouseDownDurationPrev[0] < kHold) {
+                long_press = true;
+            } else if (t > kStart && t < kHold) {
+                const float f = (t - kStart) / (kHold - kStart);
+                ImDrawList* fg = ImGui::GetForegroundDrawList();
+                const float rr = Px(22.0f);
+                fg->AddCircle(io.MousePos, rr, draw::Col(ImVec4(0, 0, 0, 0.35f * f)), 40, Px(5.0f));
+                fg->PathArcTo(io.MousePos, rr, -IM_PI * 0.5f, -IM_PI * 0.5f + IM_PI * 2.0f * f, 40);
+                fg->PathStroke(draw::Col(c.pal.accent, 0.4f + 0.6f * f), ImDrawFlags_None, Px(3.0f));
+            }
+        }
+    }
+#endif
+    if (hovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Right) || long_press)) {
+        if (long_press) ImGui::ClearActiveID(); // the finger lifting must not toggle / click the option
         const auto it = c.binds.find(id);
         if (it != c.binds.end()) {
             c.draft = it->second;
@@ -1464,6 +1503,93 @@ bool CardCombo(const char* id_str, int* current, const char* const items[], int 
     ImGui::RenderNavCursor(frame, id);
 
     return Dropdown(popup_id, frame, items, count, current, nullptr, items[*current], tx);
+}
+
+void DrawBindButtons()
+{
+    Context& c = g_ctx;
+    c.bind_buttons.clear();
+    std::vector<std::pair<ImGuiID, Bind*>> list;
+    for (auto& entry : c.binds)
+        if (entry.second.mode != BindMode::Always) list.emplace_back(entry.first, &entry.second);
+    if (list.empty()) return;
+    std::sort(list.begin(), list.end(), [](const auto& a, const auto& b) {
+        const int d = std::strcmp(a.second->label, b.second->label);
+        return d != 0 ? d < 0 : a.first < b.first;
+    });
+
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float h = S(32.0f), gap = S(8.0f), pad = S(16.0f);
+    const float fs = BodySize();
+    float w = S(96.0f);
+    for (const auto& e : list) w = ImMax(w, draw::TextWidth(c.fonts.bold, fs, e.second->label) + pad * 2.0f);
+    const ImVec2 origin(vp->WorkPos.x + vp->WorkSize.x - S(16.0f) - w, vp->WorkPos.y + std::floor(vp->WorkSize.y * 0.30f));
+    const float total_h = h * static_cast<float>(list.size()) + gap * static_cast<float>(list.size() - 1);
+
+    ImGui::SetNextWindowPos(origin);
+    ImGui::SetNextWindowSize(ImVec2(w, total_h));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+    if (ImGui::Begin("##lust_bind_buttons", nullptr, flags)) {
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        ImDrawList* dl = window->DrawList;
+        for (size_t i = 0; i < list.size(); ++i) {
+            Bind& b = *list[i].second;
+            const ImVec2 mn(origin.x, origin.y + (h + gap) * static_cast<float>(i));
+            const ImRect bb(mn, ImVec2(mn.x + w, mn.y + h));
+            c.bind_buttons.emplace_back(list[i].first, bb);
+            ImGui::PushID(static_cast<int>(list[i].first));
+            const ImGuiID id = window->GetID("##bind_button");
+            ImGui::PopID();
+            ImGui::ItemAdd(bb, id);
+            bool hovered = false, held = false;
+            if (ImGui::ButtonBehavior(bb, id, &hovered, &held, ImGuiButtonFlags_PressedOnClick) && b.mode == BindMode::Toggle) b.screen_pressed = true;
+            b.ui_down = held;
+            const float on = Animate(id, "on", b.active ? 1.0f : 0.0f, 16.0f, b.active ? 1.0f : 0.0f);
+            const float press = Animate(id, "press", (held || b.screen_down) ? 1.0f : 0.0f, 24.0f, 0.0f);
+            const float r = h * 0.5f;
+            dl->PushClipRectFullScreen();
+            draw::Glow(dl, bb.Min, bb.Max, r, draw::Col(Rgb(0x000000), 0.28f), Px(10.0f), ImVec2(0.0f, Px(3.0f)));
+            if (on > 0.01f) draw::Glow(dl, bb.Min, bb.Max, r, draw::Col(c.pal.accent, 0.35f * on), Px(10.0f));
+            dl->PopClipRect();
+            dl->AddRectFilled(bb.Min, bb.Max, draw::Col(draw::Mix(c.pal.panel, c.pal.frame_hover, press), 0.94f), r);
+            if (on > 0.01f)
+                draw::RectGradient(dl, bb.Min, bb.Max, draw::Col(c.pal.accent_top, on), draw::Col(c.pal.accent_end, on), r, 0, true);
+            dl->AddRect(bb.Min, bb.Max, draw::Col(on > 0.5f ? c.pal.accent_top : c.pal.popup_border, 0.8f), r, 0, 1.0f);
+            const float tw = draw::TextWidth(c.fonts.bold, fs, b.label);
+            draw::TextCapCentered(dl, c.fonts.bold, fs, std::floor(bb.GetCenter().x - tw * 0.5f), bb.GetCenter().y,
+                                  draw::Col(draw::Mix(c.pal.text_soft, c.pal.text, ImMax(on, press))), b.label);
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
+}
+
+int BindButtonRects(float* out, int max)
+{
+    const Context& c = g_ctx;
+    int n = 0;
+    for (const auto& e : c.bind_buttons) {
+        if (n >= max) break;
+        out[n * 4 + 0] = e.second.Min.x;
+        out[n * 4 + 1] = e.second.Min.y;
+        out[n * 4 + 2] = e.second.GetWidth();
+        out[n * 4 + 3] = e.second.GetHeight();
+        ++n;
+    }
+    return n;
+}
+
+void BindButtonTouch(int index, bool down)
+{
+    Context& c = g_ctx;
+    if (index < 0 || index >= static_cast<int>(c.bind_buttons.size())) return;
+    const auto it = c.binds.find(c.bind_buttons[static_cast<size_t>(index)].first);
+    if (it == c.binds.end()) return;
+    Bind& b = it->second;
+    if (down && !b.screen_down && b.mode == BindMode::Toggle) b.screen_pressed = true;
+    b.screen_down = down;
 }
 
 void DrawBindsOverlay(float alpha)

@@ -11,6 +11,8 @@
 
 #include <cmath>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace astral::ui {
 
@@ -36,6 +38,9 @@ struct Bind {
     bool active = false;
     bool latched = false;   // Toggle state
     char label[48] = {};
+    bool screen_down = false;    // touch builds: on-screen bind button held (Android overlay window)
+    bool screen_pressed = false; // touch builds: on-screen bind button tapped since the last frame
+    bool ui_down = false;        // on-screen bind button held, input seen by ImGui itself
 };
 
 struct ColumnLayout {
@@ -84,6 +89,7 @@ struct Context {
     const char* path_panel = "";
 
     std::unordered_map<ImGuiID, Bind> binds;
+    std::vector<std::pair<ImGuiID, ImRect>> bind_buttons; // touch builds: on-screen bind buttons laid out this frame
     Bind draft;
     ImGuiID draft_owner = 0;
     bool listening = false;
@@ -150,6 +156,11 @@ bool CardCombo(const char* id, int* current, const char* const items[], int coun
 
 // Draws the "Bind" list overlay (call outside the menu window).
 void DrawBindsOverlay(float alpha);
+// Touch builds (LUST_TOUCH): a phone has no keys, so a bind is driven by an on-screen button. Hold = active while the
+// finger is on it, Toggle = tap to switch. Buttons are drawn on the right edge, also while the menu is hidden.
+void DrawBindButtons();
+int BindButtonRects(float* out, int max);   // x, y, w, h (screen px) per button, for the Android touch windows
+void BindButtonTouch(int index, bool down); // from the Android touch windows
 
 [[nodiscard]] const char* KeyName(ImGuiKey key);
 

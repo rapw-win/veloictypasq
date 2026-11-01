@@ -51,7 +51,6 @@ ASTRAL_LIST(kQuickStop, "Early", "Between shots", "Force accuracy");
 ASTRAL_LIST(kAutoScope, "Always", "On hit chance fail", "Before shot");
 
 ASTRAL_LIST(kVisualTargets, "Enemy", "Team", "Local", "Other");
-ASTRAL_LIST(kWeaponEsp, "Name", "Icon", "Ammo");
 ASTRAL_LIST(kFlags, "Armor type", "C4 carrier", "Location", "Ping", "Reload", "Grenade pin", "Scope", "Flashed", "Defusing");
 ASTRAL_LIST(kAnimations, "Smoothing", "Death fade");
 ASTRAL_LIST(kBoxTypes, "Default", "Corner", "3D");
@@ -475,10 +474,24 @@ void Menu::PageVisuals(const ImRect& card, const ImRect& area)
     ui::Checkbox("Name", &P.name);
     ui::ColorDot("##name_col", &P.name_color);
     ui::Checkbox("Health", &P.health);
+    if (ui::BeginSettings("##health")) {
+        ui::ColorRow("Full", &P.health_color);
+        ui::ColorRow("Low", &P.health_low_color);
+        ui::EndSettings();
+    }
+    ui::ColorDot("##health_col", &P.health_color);
     ui::Checkbox("Armor", &P.armor);
-    Multi("Weapon", &P.weapon, kWeaponEsp);
+    ui::ColorDot("##armor_col", &P.armor_color);
+    ui::Checkbox("Weapon", &P.weapon_name);
+    ui::ColorDot("##weapon_col", &P.weapon_color);
+    ui::Checkbox("Weapon icon", &P.weapon_icon);
+    ui::ColorDot("##weapon_icon_col", &P.weapon_icon_color);
+    ui::Checkbox("Ammo", &P.ammo);
+    ui::ColorDot("##ammo_col", &P.ammo_color);
     ui::Checkbox("Distance", &P.distance);
+    ui::ColorDot("##distance_col", &P.distance_color);
     Multi("Flags", &P.flags, kFlags);
+    ui::ColorRow("Flags color", &P.flags_color);
     Combo("Font", &P.esp_font, kEspFonts);
     ui::Checkbox("Skeleton", &P.skeleton);
     ui::ColorDot("##skeleton_col", &P.skeleton_color);
@@ -509,9 +522,10 @@ void Menu::PageVisuals(const ImRect& card, const ImRect& area)
     ui::Checkbox("Glow", &P.glow);
     ui::ColorDot("##glow_col", &P.glow_color);
     ui::Checkbox("Chams", &P.chams);
-    if (ui::BeginSettings("##chams", ui::SettingsIcon::Plus, S(270.0f))) {
-        ChamsMaterialPicker("##material", &P.chams_material, P, V.target);
-        ui::Separator();
+    if (ui::BeginSettings("##chams")) {
+        int material_count = 0;
+        const char* const* materials = ChamsMaterialNames(&material_count);
+        ui::Combo("Material", &P.chams_material, materials, material_count);
         ui::Checkbox("Overlay", &P.chams_overlay);
         ui::Tooltip("Draw the material on top of the textured model.");
         ui::ColorRow("Visible", &P.chams_visible);
@@ -695,6 +709,7 @@ void Menu::PageMisc(const ImRect& card, const ImRect& area)
         ui::Caption("Tap the line at the bottom  -  show / hide");
         ui::Caption("Drag the title bar  -  move the menu");
         ui::Caption("Drag the corner  -  resize the menu");
+        ui::Caption("Hold an option  -  bind it to a screen button");
         ui::Separator();
         ui::Caption("lust  -  t.me/lustriped");
         ui::EndPanel();

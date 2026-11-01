@@ -28,7 +28,7 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr std::uint32_t kMagic = 0x52545341u; // "ASTR"
-constexpr std::uint32_t kVersion = 3u;
+constexpr std::uint32_t kVersion = 4u;
 constexpr const char* kExportPrefix = "LUST1:";
 
 struct Header {

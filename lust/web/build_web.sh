@@ -14,7 +14,7 @@ a = s.index('asm(\n#ifdef _WIN32'); b = s.index('.text\\n");', a) + len('.text\\
 s = s[:a] + 'extern "C" { alignas(16) const unsigned char AGG_TEXBLOB[16] = { 0 }; }' + s[b:]
 open(sys.argv[2], 'w').write(s)
 PY
-FLAGS="-target wasm32-wasi -O2 -std=c++17 -w -fno-exceptions -DLUST_WEB -DIMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS -include $HERE/web/compat_threads.h -I$HERE/src -I$HERE/third_party/imgui -I$HERE/build/velocity"
+FLAGS="-target wasm32-wasi -O2 -std=c++17 -w -fno-exceptions -DLUST_WEB -DLUST_TOUCH -DIMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS -include $HERE/web/compat_threads.h -I$HERE/src -I$HERE/third_party/imgui -I$HERE/build/velocity"
 compile() { [ -f "$2" ] && [ "$2" -nt "$1" ] || $ZIG c++ $FLAGS -c "$1" -o "$2"; }
 compile "$B/model3d_web.cpp" "$B/model3d.o" &
 for f in imgui imgui_draw imgui_tables imgui_widgets; do compile "$HERE/third_party/imgui/$f.cpp" "$B/$f.o" & done

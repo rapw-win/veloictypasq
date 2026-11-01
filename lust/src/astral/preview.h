@@ -11,9 +11,6 @@ namespace astral {
 // Chams materials of the velocitypasq menu (same order as its chams list).
 [[nodiscard]] const char* const* ChamsMaterialNames(int* count);
 
-// Chams material picker: a styled list of the materials. Returns true when the selection changed.
-bool ChamsMaterialPicker(const char* id, int* current, const PlayerVisuals& v, int target);
-
 // Live ESP preview inside the current (pane) window: the 3D agent rendered with the selected chams / glow, plus
 // box, skeleton, head dot, hitboxes, name, bars, weapon, distance and flags placed around the model bounds.
 // Drag the model to rotate it, drag an ESP element to move it to another side of the box.

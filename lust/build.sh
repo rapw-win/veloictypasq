@@ -27,7 +27,7 @@ for abi in $ABIS; do
     *) echo "unknown abi $abi"; exit 1 ;;
   esac
   O=$B/obj/$abi; L=$B/apk/lib/$abi; mkdir -p "$O" "$L"
-  FLAGS="-O2 -std=c++17 -fPIC -w -ffunction-sections -fdata-sections -I$HERE/src -I$HERE/third_party/imgui -I$HERE/build/velocity"
+  FLAGS="-O2 -std=c++17 -fPIC -w -DLUST_TOUCH -ffunction-sections -fdata-sections -I$HERE/src -I$HERE/third_party/imgui -I$HERE/build/velocity"
   [ -f "$O/model3d.o" ] || $CXX $FLAGS -c "$HERE/build/velocity/model3d.cpp" -o "$O/model3d.o" &
   for f in $SRC_IMGUI; do [ -f "$O/$f.o" ] || $CXX $FLAGS -c "$HERE/third_party/imgui/$f.cpp" -o "$O/$f.o" & done
   [ -f "$O/gl3.o" ] || $CXX $FLAGS -DIMGUI_IMPL_OPENGL_ES3 -c "$HERE/third_party/imgui/backends/imgui_impl_opengl3.cpp" -o "$O/gl3.o" &
